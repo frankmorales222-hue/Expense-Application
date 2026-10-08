@@ -1,0 +1,8 @@
+backend/.venv/
+backend/fm_finance.db
+backend/uploads/
+frontend/node_modules/
+frontend/dist/
+__pycache__/
+*.pyc
+.env
