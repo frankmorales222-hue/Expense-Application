@@ -1,0 +1,27 @@
+# SQLite-only portable build. Exact pins; do not upgrade during builds.
+fastapi==0.115.6
+starlette==0.41.3
+uvicorn[standard]==0.34.0
+sqlalchemy==2.0.54
+alembic==1.14.0
+pydantic==2.13.5
+pydantic-core==2.46.5
+pydantic-settings==2.15.0
+python-multipart==0.0.20
+argon2-cffi==25.1.0
+PyJWT==2.10.1
+boto3==1.35.90
+# Bill import (v0.4.0)
+pypdf==6.19.0
+pypdfium2==5.14.0
+rapidocr-onnxruntime==1.4.4
+onnxruntime==1.30.0
+opencv-python==5.0.0.93
+numpy==2.5.3
+pillow==12.3.0
+extract-msg==0.56.1
+# Invoices (v0.7.0): PDF and encrypted email password
+fpdf2==2.8.9
+fonttools==4.66.1
+defusedxml==0.7.1
+cryptography==50.0.2
