@@ -1,0 +1,95 @@
+# Builds portable-output\FMFinance.exe on a GitHub-hosted Windows machine.
+# Runs on every push to main, on version tags (v0.12.2, ...), or manually (Actions > Build Windows EXE > Run workflow).
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: x64
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build web interface
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install pinned Python packages
+        run: |
+          python -c "import sys,struct; assert sys.version_info[:2]==(3,12) and struct.calcsize('P')==8, sys.version"
+          python -m venv .venv
+          .venv\Scripts\python.exe -m pip install -r backend\requirements-portable.txt pyinstaller==6.22.3 pytest==8.3.4 httpx==0.28.1
+
+      - name: Run tests
+        working-directory: backend
+        env:
+          TEST_DATABASE_URL: sqlite:///data/fm_finance_test.db
+        run: ..\.venv\Scripts\python.exe -m pytest -q
+
+      - name: Build FMFinance.exe
+        run: .venv\Scripts\python.exe -m PyInstaller packaging\fm_finance_portable.spec --noconfirm --clean --distpath portable-output --workpath build-portable
+
+      - name: Self-test bill reading inside the EXE (PDF, Word, email, OCR)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath portable-output\FMFinance.exe -ArgumentList "--selftest" -PassThru -Wait
+          $report = Get-Content portable-output\selftest.txt -Raw -ErrorAction SilentlyContinue
+          $report
+          Remove-Item portable-output\selftest.txt -ErrorAction SilentlyContinue
+          if ($p.ExitCode -ne 0 -or -not $report -or -not $report.StartsWith("PASS")) { throw "Bill-reading self-test failed" }
+
+      - name: Smoke test the EXE (starts it, checks health, stops it)
+        shell: pwsh
+        run: |
+          $dir = New-Item -ItemType Directory -Force smoke
+          Copy-Item portable-output\FMFinance.exe $dir
+          # A prepared .env skips the first-run message box, which would block an unattended run.
+          @(
+            "APP_HOST=127.0.0.1", "APP_PORT=8010", "APP_ENV=production",
+            "DATABASE_URL=sqlite:///data/fm_finance.db",
+            "JWT_SECRET=ci-smoke-test-secret-0123456789-abcdefghijklmnop",
+            "ADMIN_EMAIL=admin@example.com", "ADMIN_NAME=CI", "ADMIN_INITIAL_PASSWORD=Ci-Smoke-Pass-123",
+            "DESKTOP_MODE=true", "RECEIPT_STORAGE=local", "RECEIPT_DIR=data/receipts"
+          ) | Set-Content -Encoding utf8 (Join-Path $dir ".env")
+          $p = Start-Process -FilePath (Join-Path $dir "FMFinance.exe") -WorkingDirectory $dir -PassThru
+          $ok = $false
+          for ($i = 0; $i -lt 90 -and -not $ok; $i++) {
+            Start-Sleep -Seconds 1
+            try {
+              $h = Invoke-RestMethod http://127.0.0.1:8010/api/health -TimeoutSec 2
+              if ($h.app -eq "fm-finance" -and $h.database -eq "ok") { $ok = $true; "Health: $($h | ConvertTo-Json -Compress)" }
+            } catch {}
+          }
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          if (-not $ok) {
+            Get-ChildItem -Recurse $dir | Select-Object FullName, Length | Format-Table -AutoSize
+            Get-ChildItem -Recurse (Join-Path $dir "logs") -Filter *.log -ErrorAction SilentlyContinue | Get-Content -Tail 60
+            throw "FMFinance.exe did not become healthy within 90 seconds"
+          }
+          if ($h.version -ne "0.12.2") { throw "Expected version 0.12.2, got $($h.version)" }
+          $f = Get-Item portable-output\FMFinance.exe
+          "Built FMFinance.exe, $([math]::Round($f.Length / 1MB, 1)) MB"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FMFinance-v0.12.2
+          path: portable-output/FMFinance.exe
+          if-no-files-found: error
